@@ -1,15 +1,18 @@
-import torch
 import csv
+
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from neattext.functions import clean_text
-from nltk.tokenize import TreebankWordTokenizer
-from nltk.stem import WordNetLemmatizer
 import pandas as pd
-from torch.utils.data import DataLoader, Dataset
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from neattext.functions import clean_text
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import TreebankWordTokenizer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from torch.utils.data import DataLoader, Dataset
+
+torch.random.manual_seed(0)
 
 
 def split_dataset(x, y, test_size=0.2, val_size=0.1, random_state=None):
@@ -60,7 +63,6 @@ def load_glove_embeedings(path):
             word = values[0]  # The word
             vector = np.asarray(values[1:], dtype="float32")  # The embedding vector
             glove_embeddings[word] = np.array(vector)
-        print(f"    Loaded {len(glove_embeddings)} word vectors.")
         return glove_embeddings
 
 
@@ -135,8 +137,8 @@ class TextDataset(Dataset):
 
     def __getitem__(self, index):
         text = np.array(self.texts[index], dtype="float32")
-        label = np.array(self.labels[index], dtype="float32")
-        label = np.expand_dims(label, axis=0)
+        label = np.array(self.labels[index], dtype="int64")
+        # label = np.expand_dims(label, axis=0)
         return text, label
 
 
@@ -204,8 +206,40 @@ def get_predicted_class(probabilities):
     return predicted_classes
 
 
-if __name__ == "__main__":
+def train_one_epoch(model, optimizer, criterion, dataloader):
+    model.train()
+    running_loss = 0.0
+    for batch_idx, (xs, ys) in enumerate(dataloader):
+        optimizer.zero_grad()
+        output = model(xs)
+        loss = criterion(output, ys)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+    return running_loss / (batch_idx + 1)
 
+
+def val_one_epoch(model, criterion, dataloader):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for batch_idx, (xs, ys) in enumerate(dataloader):
+            output = model(xs)
+            loss = criterion(output, ys)
+            running_loss += loss.item()
+    return running_loss / (batch_idx + 1)
+
+
+def print_loss(epoch, epochs, train_loss, val_loss, print_step):
+    if (epoch + 1) % print_step == 0:
+        print(
+            f"  Epoch [{epoch + 1}/{epochs}], "
+            f"  Train Loss: {train_loss:.4f}, "
+            f"  Validation Loss: {val_loss:.4f}"
+        )
+
+
+def main(debug=False):
     # Read dataset
     print("Opening dataset...")
     x = []
@@ -223,9 +257,10 @@ if __name__ == "__main__":
                 x.append(raw_text)
                 y.append(label)
 
-    # ! LIMIT DATASET TO 100 samples only for creation
-    x = x[:100]
-    y = y[:100]
+    if debug:
+        # ! LIMIT DATASET TO 2000 samples
+        x = x[:2000]
+        y = y[:2000]
 
     # Encode y as float
     print("Encoding labels...")
@@ -240,9 +275,10 @@ if __name__ == "__main__":
 
     # Clean dataset
     print("Cleaning dataset...")
-    for i in range(0, 3):
-        print(f"    Before cleaning: {x_train[i]}")
-        print(f"    After cleaning: {clean(x_train[i])}")
+    if debug:
+        for i in range(0, 3):
+            print(f"    Before cleaning: {x_train[i]}")
+            print(f"    After cleaning: {clean(x_train[i])}")
     x_train = [clean(x) for x in x_train]
     x_val = [clean(x) for x in x_val]
     x_test = [clean(x) for x in x_test]
@@ -251,17 +287,18 @@ if __name__ == "__main__":
     print("Preprocessing dataset...")
     lemmatizer = WordNetLemmatizer()
     tokenizer = TreebankWordTokenizer()
-    for i in range(0, 3):
-        print(f"    Before preprocesing: {x_train[i]}")
-        print(
-            f"    After preprocesing: {preprocess(x_train[i], tokenizer, lemmatizer)}"
-        )
+    if debug:
+        for i in range(0, 3):
+            print(f"    Before preprocesing: {x_train[i]}")
+            print(
+                f"    After preprocesing: {preprocess(x_train[i], tokenizer, lemmatizer)}"
+            )
     x_train = [preprocess(x, tokenizer, lemmatizer) for x in x_train]
     x_val = [preprocess(x, tokenizer, lemmatizer) for x in x_val]
     x_test = [preprocess(x, tokenizer, lemmatizer) for x in x_test]
 
     # Embedding
-    print("Create text embedding...")
+    print("Creating text embedding...")
     path = "/home/anj/Documents/practice/book practical nlp/data/glove/glove.6B/glove.6B.50d.txt"
     glove_embeddings = load_glove_embeedings(path)
     embedding_shape = (50,)
@@ -339,56 +376,110 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
-    for batch_idx, (inputs, targets) in enumerate(train_dataloader):
-        print(f"    Batch {batch_idx + 1}")
-        # (batch_size, sequence_length, embedding_dim)
-        print(f"    Inputs shape: {inputs.shape}")
-        # (batch_size, 1)
-        print(f"    Targets shape: {targets.shape}")
-        # print(f"    Inputs:", inputs)
-        # print(f"    Targets:", targets)
-        break
+    if debug:
+        for batch_idx, (inputs, targets) in enumerate(train_dataloader):
+            print(f"    Batch {batch_idx + 1}")
+            # (batch_size, sequence_length, embedding_dim)
+            print(f"    Inputs shape: {inputs.shape}")
+            # (batch_size, 1)
+            print(f"    Targets shape: {targets.shape}")
+            # print(f"    Inputs:", inputs)
+            # print(f"    Targets:", targets)
+            break
 
     # Define model
     # RNN
     embedding_dim = 50
-    hidden_size = 2
     n_class = len(set(y_train))
-    n_layers = 2
     rnn_classifier = RNNClassifier(
         input_size=embedding_dim,
-        hidden_size=hidden_size,
+        hidden_size=64,
         output_size=n_class,
-        num_layers=n_layers,
+        num_layers=2,
     )
     gru_classifier = GRUClassifier(
         input_size=embedding_dim,
-        hidden_size=hidden_size,
+        hidden_size=64,
         output_size=n_class,
-        num_layers=n_layers,
+        num_layers=2,
     )
     lstm_classifier = LSTMClassifier(
         input_size=embedding_dim,
-        hidden_size=hidden_size,
+        hidden_size=128,
         output_size=n_class,
-        num_layers=n_layers,
+        num_layers=1,
     )
     # Make sure the model is working
-    with torch.no_grad():
-        print(rnn_classifier(inputs).shape)
-        print(calculate_class_probabilities(rnn_classifier(inputs)))
-        print(
-            get_predicted_class(calculate_class_probabilities(rnn_classifier(inputs)))
+    if debug:
+        with torch.no_grad():
+            print(rnn_classifier(inputs).shape)
+            print(calculate_class_probabilities(rnn_classifier(inputs)))
+            print(
+                get_predicted_class(
+                    calculate_class_probabilities(rnn_classifier(inputs))
+                )
+            )
+        with torch.no_grad():
+            print(gru_classifier(inputs).shape)
+            print(calculate_class_probabilities(gru_classifier(inputs)))
+            print(
+                get_predicted_class(
+                    calculate_class_probabilities(gru_classifier(inputs))
+                )
+            )
+        with torch.no_grad():
+            print(lstm_classifier(inputs).shape)
+            print(calculate_class_probabilities(lstm_classifier(inputs)))
+            print(
+                get_predicted_class(
+                    calculate_class_probabilities(lstm_classifier(inputs))
+                )
+            )
+
+    # Training
+    epochs = 20
+    print_step = 1
+    # Training RNN
+    lr = 0.0001
+    rnn_optimizer = torch.optim.Adam(rnn_classifier.parameters(), lr=lr)
+    rnn_criterion = nn.CrossEntropyLoss()
+    print("Training model: RNN")
+    for epoch in range(epochs):
+        rnn_train_loss = train_one_epoch(
+            rnn_classifier, rnn_optimizer, rnn_criterion, train_dataloader
         )
-    with torch.no_grad():
-        print(gru_classifier(inputs).shape)
-        print(calculate_class_probabilities(gru_classifier(inputs)))
-        print(
-            get_predicted_class(calculate_class_probabilities(gru_classifier(inputs)))
+        rnn_val_loss = val_one_epoch(rnn_classifier, rnn_criterion, val_dataloader)
+        print_loss(epoch, epochs, rnn_train_loss, rnn_val_loss, print_step)
+    # Training GRU
+    lr = 0.001
+    gru_optimizer = torch.optim.Adam(gru_classifier.parameters(), lr=lr)
+    gru_criterion = nn.CrossEntropyLoss()
+    print("Training model: GRU")
+    for epoch in range(epochs):
+        gru_train_loss = train_one_epoch(
+            gru_classifier, gru_optimizer, gru_criterion, train_dataloader
         )
-    with torch.no_grad():
-        print(lstm_classifier(inputs).shape)
-        print(calculate_class_probabilities(lstm_classifier(inputs)))
-        print(
-            get_predicted_class(calculate_class_probabilities(lstm_classifier(inputs)))
+        gru_val_loss = val_one_epoch(gru_classifier, gru_criterion, val_dataloader)
+        print_loss(epoch, epochs, gru_train_loss, gru_val_loss, print_step)
+    # Training LSTM
+    lr = 0.0001
+    lstm_optimizer = torch.optim.Adam(lstm_classifier.parameters(), lr=lr)
+    lstm_criterion = nn.CrossEntropyLoss()
+    print("Training model: LSTM")
+    for epoch in range(epochs):
+        lstm_train_loss = train_one_epoch(
+            lstm_classifier, lstm_optimizer, lstm_criterion, train_dataloader
         )
+        lstm_val_loss = val_one_epoch(lstm_classifier, lstm_criterion, val_dataloader)
+        print_loss(epoch, epochs, lstm_train_loss, lstm_val_loss, print_step)
+
+
+if __name__ == "__main__":
+
+    debug = False
+    if debug:
+        print("Debugging is on.")
+    else:
+        print("Debugging is off.")
+
+    main(debug)
