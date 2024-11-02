@@ -1,4 +1,5 @@
 import csv
+from collections import namedtuple
 
 import numpy as np
 import pandas as pd
@@ -8,6 +9,13 @@ import torch.nn.functional as F
 from neattext.functions import clean_text
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import TreebankWordTokenizer
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, Dataset
@@ -48,6 +56,7 @@ def clean(text):
 
 
 def preprocess(text, tokenizer, lemmatizer):
+    """Tokenize and lemmatize the document."""
     text = tokenizer.tokenize(text)
     text = [lemmatizer.lemmatize(word) for word in text]
     return text
@@ -72,6 +81,7 @@ def get_word_embedding(word, glove_embeddings, embedding_shape):
 
 
 def get_sentence_embedding(sentence, glove_embeddings, embedding_shape):
+    """Get word embedding of a sentence (collection of words)."""
     return np.array(
         [
             get_word_embedding(word, glove_embeddings, embedding_shape)
@@ -81,6 +91,7 @@ def get_sentence_embedding(sentence, glove_embeddings, embedding_shape):
 
 
 def get_document_embedding(document, glove_embeddings, embedding_shape):
+    """Get word embedding of a document (collection of sentences)."""
     return [
         get_sentence_embedding(sentence, glove_embeddings, embedding_shape)
         for sentence in document
@@ -88,6 +99,7 @@ def get_document_embedding(document, glove_embeddings, embedding_shape):
 
 
 def pad_or_truncate(dataset, max_sentence_length):
+    """Pad or truncate sentences in a document to have the same lengths."""
     dataset = dataset.copy()
     for i, _ in enumerate(dataset):
         current_sentence_length = dataset[i].shape[0]
@@ -197,12 +209,20 @@ class LSTMClassifier(nn.Module):
 
 
 def calculate_class_probabilities(logits):
+    """Calculate probabilities from logits (output of linear layer)."""
     probabilities = F.softmax(logits, dim=1)
     return probabilities
 
 
 def get_predicted_class(probabilities):
-    predicted_classes = torch.argmax(probabilities, dim=1)
+    """Get the predicted class from probabilities, supporting both PyTorch tensors and NumPy arrays."""
+    if isinstance(probabilities, torch.Tensor):
+        predicted_classes = torch.argmax(probabilities, dim=1)
+    elif isinstance(probabilities, np.ndarray):
+        predicted_classes = np.argmax(probabilities, axis=1)
+    else:
+        raise TypeError("Input should be a PyTorch tensor or NumPy array.")
+
     return predicted_classes
 
 
@@ -230,6 +250,25 @@ def val_one_epoch(model, criterion, dataloader):
     return running_loss / (batch_idx + 1)
 
 
+def test_model(model, dataloader):
+    model.eval()
+    all_xs = []
+    all_ys = []
+    all_preds = []
+    with torch.no_grad():
+        for xs, ys in dataloader:
+            preds = model(xs)
+            all_xs.append(xs.numpy())
+            all_ys.append(ys.numpy())
+            all_preds.append(preds.numpy())
+
+    all_xs = np.concatenate(all_xs, axis=0)
+    all_ys = np.concatenate(all_ys, axis=0)
+    all_preds = np.concatenate(all_preds, axis=0)
+
+    return all_xs, all_ys, all_preds
+
+
 def print_loss(epoch, epochs, train_loss, val_loss, print_step):
     if (epoch + 1) % print_step == 0:
         print(
@@ -237,6 +276,16 @@ def print_loss(epoch, epochs, train_loss, val_loss, print_step):
             f"  Train Loss: {train_loss:.4f}, "
             f"  Validation Loss: {val_loss:.4f}"
         )
+
+
+def return_clf_score(y_true, y_pred):
+    acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average="weighted")
+    precision = precision_score(y_true, y_pred, average="weighted", zero_division=0.0)
+    recall = recall_score(y_true, y_pred, average="weighted")
+    matrix = confusion_matrix(y_true, y_pred, normalize="true")
+    Scores = namedtuple("Scores", ["acc", "f1", "precision", "recall", "matrix"])
+    return Scores(acc, f1, precision, recall, matrix)
 
 
 def main(debug=False):
@@ -259,8 +308,8 @@ def main(debug=False):
 
     if debug:
         # ! LIMIT DATASET TO 2000 samples
-        x = x[:2000]
-        y = y[:2000]
+        x = x[:300]
+        y = y[:300]
 
     # Encode y as float
     print("Encoding labels...")
@@ -399,7 +448,7 @@ def main(debug=False):
     )
     gru_classifier = GRUClassifier(
         input_size=embedding_dim,
-        hidden_size=64,
+        hidden_size=32,
         output_size=n_class,
         num_layers=2,
     )
@@ -436,8 +485,8 @@ def main(debug=False):
                 )
             )
 
-    # Training
-    epochs = 20
+    # Training and Validation
+    epochs = 10
     print_step = 1
     # Training RNN
     lr = 0.0001
@@ -472,6 +521,24 @@ def main(debug=False):
         )
         lstm_val_loss = val_one_epoch(lstm_classifier, lstm_criterion, val_dataloader)
         print_loss(epoch, epochs, lstm_train_loss, lstm_val_loss, print_step)
+
+    # Testing
+    rnn_xs, rnn_ys, rnn_preds = test_model(rnn_classifier, test_dataloader)
+    gru_xs, gru_ys, gru_preds = test_model(gru_classifier, test_dataloader)
+    lstm_xs, lstm_ys, lstm_preds = test_model(lstm_classifier, test_dataloader)
+    rnn_preds = get_predicted_class(rnn_preds)
+    gru_preds = get_predicted_class(gru_preds)
+    lstm_preds = get_predicted_class(lstm_preds)
+    rnn_scores = return_clf_score(rnn_ys, rnn_preds)
+    gru_scores = return_clf_score(gru_ys, gru_preds)
+    lstm_scores = return_clf_score(lstm_ys, lstm_preds)
+    print(
+        f"""Test scores:
+    RNN: Accuracy = {rnn_scores.acc: .4f}, F1 = {rnn_scores.f1: .4f}
+    GRU: Accuracy = {gru_scores.acc: .4f}, F1 = {gru_scores.f1: .4f}
+    LSTM: Accuracy = {lstm_scores.acc: .4f}, F1 = {lstm_scores.f1: .4f}
+    """
+    )
 
 
 if __name__ == "__main__":
