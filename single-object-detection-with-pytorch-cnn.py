@@ -1,28 +1,22 @@
-from pathlib import Path
-import numpy as np
-from PIL import Image
-from pprint import pprint
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import random_split
-from sklearn.model_selection import train_test_split
 import os
 import random
+from pathlib import Path
+from pprint import pprint
+
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torchvision
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+from PIL import Image
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Dataset, random_split
 
 torch.manual_seed(0)
-
-
-import os
-import random
-import pandas as pd
-from pathlib import Path
 
 
 def load_image_dataset(image_path, label_path, shuffle=False):
@@ -368,7 +362,7 @@ def main(debug=True):
     lr = 0.001
     optimizer = optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
-    epochs = 5
+    epochs = 10
     print_step = 1
     train_losses = []
     val_losses = []
